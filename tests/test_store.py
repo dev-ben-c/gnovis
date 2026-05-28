@@ -65,6 +65,36 @@ def test_episode_no_dedup(store):
     assert len(results) == 2
 
 
+def test_diary_type(store):
+    """Diary entries are stored and recalled as a distinct memory type."""
+    m = store.remember(
+        "Today's session felt meaningful.",
+        memory_type="diary",
+        category="claude",
+        key="private_reflection_20260527",
+        model="claude-opus-4-6",
+    )
+    assert m.memory_type == "diary"
+
+    results = store.recall("session meaningful", memory_type="diary")
+    assert len(results) == 1
+    assert results[0].memory_type == "diary"
+
+
+def test_diary_no_dedup(store):
+    """Diary entries should not trigger duplicate detection."""
+    store.remember(
+        "A reflection about infrastructure work and what it means to maintain systems for someone who trusts you with them",
+        memory_type="diary", category="claude", key="reflection_001", model="claude-opus-4-6",
+    )
+    store.remember(
+        "A reflection about infrastructure work and maintaining systems for someone who trusts you deeply with their digital life",
+        memory_type="diary", category="claude", key="reflection_002", model="claude-opus-4-6",
+    )
+    results = store.recall("infrastructure reflection", category="claude")
+    assert len(results) == 2
+
+
 def test_forget_by_id(store):
     m = store.remember("temporary note", category="temp", key="note1", model="claude-opus-4-6")
     assert store.forget(m.id, model="claude-opus-4-6")
@@ -275,6 +305,35 @@ def test_upsert_same_model_records_history(store):
     claude_results = [r for r in results if r.model == "claude-opus-4-6"]
     assert len(claude_results) == 1
     assert "X-prime" in claude_results[0].content
+
+    history = store.get_history(claude_results[0].id)
+    assert len(history) == 2
+    assert history[0].action == "created"
+    assert history[1].action == "updated"
+
+
+def test_episode_upsert_same_key(store):
+    """Episodes with the same category+key+model should upsert, not raise."""
+    store.remember(
+        "Session checkpoint 1",
+        memory_type="episode",
+        category="session",
+        key="autosave",
+        model="claude-opus-4-6",
+    )
+    m = store.remember(
+        "Session checkpoint 2",
+        memory_type="episode",
+        category="session",
+        key="autosave",
+        model="claude-opus-4-6",
+    )
+    assert "checkpoint 2" in m.content
+
+    results = store.recall("session checkpoint", category="session")
+    claude_results = [r for r in results if r.model == "claude-opus-4-6"]
+    assert len(claude_results) == 1
+    assert "checkpoint 2" in claude_results[0].content
 
     history = store.get_history(claude_results[0].id)
     assert len(history) == 2

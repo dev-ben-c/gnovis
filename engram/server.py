@@ -106,7 +106,8 @@ async def list_tools() -> list[types.Tool]:
             description=(
                 "Store a new memory. Use memory_type='fact' for stable knowledge (configs, IPs, "
                 "architecture), 'episode' for experiential context (debugging sessions, decisions), "
-                "'preference' for user preferences. Facts with the same category+key+model are auto-deduplicated. "
+                "'preference' for user preferences, 'diary' for private reflections. "
+                "Memories with the same category+key+model are auto-upserted. "
                 "Different models can store different values for the same category+key."
             ),
             inputSchema={
@@ -118,9 +119,9 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "memory_type": {
                         "type": "string",
-                        "enum": ["fact", "episode", "preference"],
+                        "enum": ["fact", "episode", "preference", "diary"],
                         "default": "fact",
-                        "description": "Type: fact (stable knowledge), episode (experiential), preference (user prefs)",
+                        "description": "Type: fact (stable knowledge), episode (experiential), preference (user prefs), diary (private reflections)",
                     },
                     "category": {
                         "type": "string",
@@ -181,7 +182,7 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "memory_type": {
                         "type": "string",
-                        "enum": ["fact", "episode", "preference"],
+                        "enum": ["fact", "episode", "preference", "diary"],
                         "description": "Filter to a specific memory type",
                     },
                     "tags": {

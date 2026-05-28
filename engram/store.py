@@ -43,7 +43,7 @@ def model_family(model: str | None) -> str | None:
 class Memory:
     id: str
     content: str
-    memory_type: str  # "fact", "episode", "preference"
+    memory_type: str  # "fact", "episode", "preference", "diary"
     category: str
     key: Optional[str]
     tags: list[str]
@@ -162,7 +162,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
-    memory_type TEXT NOT NULL CHECK(memory_type IN ('fact', 'episode', 'preference')),
+    memory_type TEXT NOT NULL CHECK(memory_type IN ('fact', 'episode', 'preference', 'diary')),
     category TEXT NOT NULL DEFAULT 'general',
     key TEXT,
     tags TEXT NOT NULL DEFAULT '[]',
@@ -361,6 +361,9 @@ class MemoryStore:
         if version < 4:
             self._migrate_v4()
 
+        if version < 5:
+            self._migrate_v5()
+
     def _migrate_v2(self):
         """v2: Per-model memory — UNIQUE(category, key, model), model NOT NULL."""
         logger.info("Running schema migration v2: per-model memory partitioning")
@@ -514,6 +517,118 @@ class MemoryStore:
         )
         self._conn.commit()
         logger.info("Schema migration v4 complete")
+
+    def _migrate_v5(self):
+        """v5: Add 'diary' memory type, migrate existing diary entries."""
+        logger.info("Running schema migration v5: diary memory type")
+
+        self._conn.execute("PRAGMA foreign_keys=OFF")
+
+        # 1. Rebuild memories table with updated CHECK constraint
+        self._conn.execute("DROP TRIGGER IF EXISTS memories_ai")
+        self._conn.execute("DROP TRIGGER IF EXISTS memories_ad")
+        self._conn.execute("DROP TRIGGER IF EXISTS memories_au")
+
+        self._conn.execute("ALTER TABLE memories RENAME TO memories_old")
+
+        self._conn.execute("""
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                memory_type TEXT NOT NULL CHECK(memory_type IN ('fact', 'episode', 'preference', 'diary')),
+                category TEXT NOT NULL DEFAULT 'general',
+                key TEXT,
+                tags TEXT NOT NULL DEFAULT '[]',
+                confidence REAL NOT NULL DEFAULT 1.0,
+                source TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                accessed_at TEXT NOT NULL,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                model TEXT NOT NULL DEFAULT 'legacy',
+                context TEXT,
+                host TEXT,
+                UNIQUE(category, key, model)
+            )
+        """)
+
+        self._conn.execute("""
+            INSERT INTO memories
+            SELECT id, content, memory_type, category, key, tags, confidence,
+                   source, created_at, updated_at, accessed_at, access_count,
+                   model, context, host
+            FROM memories_old
+        """)
+
+        self._conn.execute("DROP TABLE memories_old")
+
+        # 2. Convert existing diary entries: episodes in category 'claude' with 'diary' tag
+        self._conn.execute("""
+            UPDATE memories SET memory_type = 'diary'
+            WHERE memory_type = 'episode'
+              AND category = 'claude'
+              AND tags LIKE '%diary%'
+        """)
+
+        # 3. Rebuild FTS triggers
+        self._conn.execute("""
+            CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, content, category, key, tags)
+                VALUES (new.rowid, new.content, new.category, new.key, new.tags);
+            END
+        """)
+        self._conn.execute("""
+            CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, category, key, tags)
+                VALUES ('delete', old.rowid, old.content, old.category, old.key, old.tags);
+            END
+        """)
+        self._conn.execute("""
+            CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, category, key, tags)
+                VALUES ('delete', old.rowid, old.content, old.category, old.key, old.tags);
+                INSERT INTO memories_fts(rowid, content, category, key, tags)
+                VALUES (new.rowid, new.content, new.category, new.key, new.tags);
+            END
+        """)
+
+        # 4. Rebuild FTS content
+        self._conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
+
+        # 5. Rebuild indexes
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(category, key)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_accessed ON memories(accessed_at)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_model ON memories(model)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_host ON memories(host)")
+
+        # 6. Rebuild embeddings FK reference
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings_new (
+                memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL,
+                model TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        existing_embeds = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'embeddings'"
+        ).fetchone()
+        if existing_embeds:
+            self._conn.execute("INSERT OR IGNORE INTO embeddings_new SELECT * FROM embeddings")
+            self._conn.execute("DROP TABLE embeddings")
+        self._conn.execute("ALTER TABLE embeddings_new RENAME TO embeddings")
+
+        # 7. Record migration
+        self._conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)",
+            (5, _now(), "Add diary memory type, migrate existing diary entries"),
+        )
+        self._conn.commit()
+
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        logger.info("Schema migration v5 complete")
 
     def close(self):
         if self._embed_client:
@@ -703,7 +818,7 @@ class MemoryStore:
         context: str | None = None,
         host: str | None = None,
     ) -> Memory:
-        """Store a new memory. If a fact with the same category+key+model exists, update it.
+        """Store a new memory. If a memory with the same category+key+model exists, update it.
 
         Raises DuplicateMemoryError if a semantically similar memory from the same model
         family already exists (facts and preferences only, not episodes).
@@ -712,8 +827,8 @@ class MemoryStore:
         tags = tags or []
         mid = _short_id(content)
 
-        if key and memory_type == "fact":
-            # Upsert: update existing fact with same category+key+model
+        if key:
+            # Upsert: update existing memory with same category+key+model
             existing = self._conn.execute(
                 "SELECT * FROM memories WHERE category = ? AND key = ? AND model = ?",
                 (category, key, model),
@@ -748,7 +863,7 @@ class MemoryStore:
         # Duplicate detection: check for same-model semantic near-duplicates.
         # Only for facts and preferences — episodes are unique events by definition.
         # Skip for short content (<50 chars) — embeddings aren't discriminative enough.
-        if vec and self._vec_available and memory_type != "episode" and len(content) >= 50:
+        if vec and self._vec_available and memory_type not in ("episode", "diary") and len(content) >= 50:
             similar = self._find_similar_same_model(vec, model)
             if similar:
                 raise DuplicateMemoryError(similar[0], similar[1])
