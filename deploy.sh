@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "=== Engram Deploy ==="
+echo "=== Gnovis Deploy ==="
 
 # 1. Python venv
 if [ ! -d "venv" ]; then
@@ -15,7 +15,7 @@ source venv/bin/activate
 echo "Python: $(python --version)"
 
 # 2. Install package
-echo "Installing engram..."
+echo "Installing gnovis..."
 pip install -q -e ".[vectors,dev]"
 
 # 3. Ollama embedding model
@@ -79,7 +79,7 @@ else
             echo "WARNING: Health check failed. Check /tmp/engram-sse.log"
         fi
     else
-        echo "No running Engram service found."
+        echo "No running Gnovis service found."
         echo "  Start with: python -m engram.server --transport sse --host 0.0.0.0 --port 8093"
         echo "  Or add to Claude Code: claude mcp add engram -- $SCRIPT_DIR/venv/bin/python -m engram.server"
     fi

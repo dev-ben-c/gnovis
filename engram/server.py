@@ -1,4 +1,4 @@
-"""Engram MCP server — persistent memory for LLMs."""
+"""Gnovis MCP server — persistent memory for LLMs."""
 
 from __future__ import annotations
 
@@ -933,9 +933,36 @@ def main():
         async def health(request: Request):
             return JSONResponse({"status": "ok", "db": DB_PATH})
 
+        async def recall_http(request: Request):
+            q = (request.query_params.get("q") or "").strip()
+            if not q:
+                return JSONResponse({"count": 0, "memories": []})
+            try:
+                limit = int(request.query_params.get("limit", "5"))
+            except (TypeError, ValueError):
+                limit = 5
+            caller_model = request.query_params.get("caller_model")
+            caller_host = request.query_params.get("caller_host")
+            try:
+                result = store.recall(query=q, limit=limit, caller_model=caller_model, caller_host=caller_host)
+            except Exception as e:
+                return JSONResponse({"count": 0, "memories": [], "error": str(e)}, status_code=500)
+            mems = []
+            def _add(m, provenance):
+                mems.append({"id": m.id, "memory_type": m.memory_type, "category": m.category, "key": m.key, "model": m.model, "score": getattr(m, "score", 0.0), "content": m.content, "provenance": provenance})
+            if isinstance(result, RecallResult):
+                for m in result.own: _add(m, "own")
+                for m in result.others: _add(m, "other")
+                for m in result.unknown: _add(m, "unknown")
+            else:
+                for m in (result or []): _add(m, "unknown")
+            mems.sort(key=lambda x: x.get("score") or 0.0, reverse=True)
+            return JSONResponse({"count": len(mems), "memories": mems})
+
         app = Starlette(
             routes=[
                 Route("/health", health),
+                Route("/recall", recall_http),
                 Route("/sse", handle_sse),
                 Mount("/messages/", app=sse.handle_post_message),
             ],

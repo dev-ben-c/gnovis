@@ -1,4 +1,6 @@
-# Engram
+# Gnovis
+
+*From Proto-Indo-European \*gneh₃- (to know) — "to have known"*
 
 Persistent memory system for LLMs. SQLite + FTS5 + vector search, exposed via [Model Context Protocol (MCP)](https://modelcontextprotocol.io).
 
@@ -19,7 +21,7 @@ LongMemEval (500 questions, ICLR 2025):
 
 | System | R@5 | Notes |
 |--------|-----|-------|
-| **Engram** | **0.970** | Raw hybrid retrieval, no reranking |
+| **Gnovis** | **0.970** | Raw hybrid retrieval, no reranking |
 | MemPalace | 0.966 | Raw (ChromaDB + SQLite) |
 | MemPalace + Haiku | 1.000 | With LLM reranking |
 
@@ -34,8 +36,8 @@ Benchmark script and results in `benchmarks/longmemeval/`.
 ## Install
 
 ```bash
-git clone https://github.com/dev-ben-c/engram.git
-cd engram
+git clone https://github.com/dev-ben-c/gnovis.git
+cd gnovis
 ./deploy.sh
 ```
 
@@ -53,7 +55,7 @@ ollama pull nomic-embed-text
 ### With Claude Code (MCP stdio)
 
 ```bash
-claude mcp add engram -- /path/to/engram/venv/bin/python -m engram.server
+claude mcp add gnovis -- /path/to/gnovis/venv/bin/python -m engram.server
 ```
 
 ### As HTTP/SSE server (for remote access)
@@ -64,7 +66,7 @@ source venv/bin/activate
 python -m engram.server --transport sse --host 0.0.0.0 --port 8093
 
 # Connect from Claude Code
-claude mcp add engram --transport sse http://your-host:8093/sse
+claude mcp add gnovis --transport sse http://your-host:8093/sse
 ```
 
 ### Health check
@@ -78,7 +80,7 @@ curl http://localhost:8093/health
 
 | Tool | Description |
 |------|-------------|
-| `remember` | Store a new memory (fact, episode, or preference) |
+| `remember` | Store a new memory (fact, episode, preference, or diary) |
 | `recall` | Hybrid search with temporal filtering and abstention |
 | `forget` | Delete a memory by ID or category+key |
 | `update` | Modify fields of an existing memory |
@@ -101,7 +103,7 @@ curl http://localhost:8093/health
 recall(
   query: str,              # Natural language search
   category: str,           # Filter by category
-  memory_type: str,        # "fact", "episode", "preference"
+  memory_type: str,        # "fact", "episode", "preference", "diary"
   tags: [str],             # Filter by tags
   limit: int = 10,         # Max results
   caller_model: str,       # Your model ID (enables provenance)
@@ -118,7 +120,7 @@ recall(
 
 Default location: `~/.engram/memory.db`
 
-Schema auto-migrates on startup. Current version: v4.
+Schema auto-migrates on startup. Current version: v5.
 
 ## Tests
 
